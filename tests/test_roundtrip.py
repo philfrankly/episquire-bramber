@@ -1,0 +1,165 @@
+"""Engine round-trip test: the lineage graph must survive a full DB rebuild from disk.
+
+The load-bearing invariant — "losing bramber.db is a non-event." We build a throwaway
+project under a temp dir, point the engine at it, write a resource version with source
+lineage, then delete bramber.db and rebuild from the .md tree alone, asserting the lineage
+returns identical.
+
+The seeded extract uses NO identity_* header, so this also proves the content_sha
+back-compat path of the generalized sources identity (spec 01 §4).
+
+Run:  cd bramber && python -m pytest tests/   ·   or:  python tests/test_roundtrip.py
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+ENGINE = Path(__file__).resolve().parent.parent / "bramber" / "engine"
+
+
+def _load_db():
+    spec = importlib.util.spec_from_file_location("bramber_db", ENGINE / "db.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _seed_project(root: Path) -> None:
+    (root / "_bramber" / "extracts").mkdir(parents=True)
+    (root / "views" / "architecture").mkdir(parents=True)
+    (root / "views" / "architecture" / "view.md").write_text(
+        "---\nname: Architecture\nslug: architecture\nview_version: 1\nmaintainer: human\n---\n"
+        "# Architecture\n",
+        encoding="utf-8",
+    )
+    # Legacy-style text extract: no identity_* header -> exercises the content_sha fallback.
+    (root / "_bramber" / "extracts" / "2026-05-23-acme.md").write_text(
+        '---\nsource_url: https://acme.test\nsource_type: blog\ntitle: "Acme economics"\n'
+        "author: jdoe\ndate_published: 2026-05-01\ndate_ingested: 2026-05-23\n---\n"
+        "Acme sells widgets at 40% gross margin.\n",
+        encoding="utf-8",
+    )
+
+
+def _lineage(db_path: Path):
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT s.title, vs.contribution, vs.scan_path "
+            "FROM version_sources vs JOIN sources s ON s.id = vs.source_id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def test_lineage_survives_rebuild(tmp_path: Path):
+    db = _load_db()
+    db.configure(root=tmp_path, db=tmp_path / "bramber.db")
+    _seed_project(tmp_path)
+
+    counts = db.sync_from_disk()
+    assert counts["views"] == 1
+    assert counts["sources"] == 1
+
+    res = db.write_resource_version(
+        "architecture",
+        "module-map",
+        title="Module Map",
+        content=(
+            "---\nname: module-map\ntitle: Module Map\nview: architecture\n---\n"
+            "# Module Map\n\nAcme captures ~40% gross margin on widgets.\n"
+        ),
+        change_summary="initial extraction",
+        sources=[
+            {
+                "extract": "_bramber/extracts/2026-05-23-acme.md",
+                "scan": "_bramber/scans/2026-05-23-acme.md",
+                "contribution": "established 40% gross margin",
+            }
+        ],
+        description="Acme module map",
+    )
+    assert res["created"] is True
+
+    snapshot = tmp_path / "views" / "architecture" / "resources" / "module-map" / "versions" / "1.md"
+    assert snapshot.exists(), "version snapshot must be written to disk"
+
+    before = _lineage(tmp_path / "bramber.db")
+    assert len(before) == 1
+    assert before[0]["contribution"] == "established 40% gross margin"
+
+    # The invariant: nuke the DB, rebuild purely from the .md tree.
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(tmp_path / "bramber.db") + suffix)
+        if p.exists():
+            p.unlink()
+    db.sync_from_disk()
+
+    after = _lineage(tmp_path / "bramber.db")
+    assert after == before, "lineage must reconstruct identically from disk after a rebuild"
+
+
+def test_human_maintained_resource_is_gated_from_agent_writes(tmp_path: Path):
+    """Invariant 4 — human-gated artifacts — was prose with no writer-side check, so an agent
+    write would overwrite a human-authored resource *and* downgrade its `maintainer` to 'agent'
+    on the way past, silently converting a gated artifact into a generated one (specs/07 §5.3).
+
+    The escape hatch is declaring yourself: `maintainer='human'` is what /bramber:evaluate passes.
+    """
+    db = _load_db()
+    db.configure(root=tmp_path, db=tmp_path / "bramber.db")
+    _seed_project(tmp_path)
+    db.sync_from_disk()
+
+    human_body = "# Module Map\n\nHand-written by the founder; not a projection.\n"
+    first = db.write_resource_version(
+        "architecture", "module-map", title="Module Map", content=human_body,
+        change_summary="human authored", maintainer="human")
+    assert first["created"] and first["version_num"] == 1
+
+    with pytest.raises(SystemExit) as exc:
+        db.write_resource_version(
+            "architecture", "module-map", title="Module Map",
+            content="# Module Map\n\nRegenerated by the deterministic baseline.\n",
+            change_summary="agent overwrite")           # maintainer defaults to 'agent'
+    assert "maintainer: human" in str(exc.value)
+
+    # Refused means *nothing happened*: same bytes on disk, no v2, still human-maintained.
+    resource_md = tmp_path / "views" / "architecture" / "resources" / "module-map" / "RESOURCE.md"
+    assert resource_md.read_text(encoding="utf-8") == human_body
+    conn = sqlite3.connect(str(tmp_path / "bramber.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM resource_versions").fetchone()["c"] == 1, "no v2 was minted"
+        assert conn.execute(
+            "SELECT maintainer FROM resources WHERE slug='module-map'").fetchone()["maintainer"] \
+            == "human", "a refused write must not downgrade the maintainer"
+    finally:
+        conn.close()
+
+    # The gated path itself still works — the guard blocks agents, not humans.
+    second = db.write_resource_version(
+        "architecture", "module-map", title="Module Map",
+        content="# Module Map\n\nRevised by the founder at /bramber:evaluate.\n",
+        change_summary="human revision", maintainer="human")
+    assert second["created"] and second["version_num"] == 2
+
+
+if __name__ == "__main__":
+    import shutil
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="bramber_test_"))
+    try:
+        test_lineage_survives_rebuild(tmp)
+        print("OK — lineage survives rebuild")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)

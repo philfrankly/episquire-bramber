@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# PyPI name verified unclaimed 2026-07-21 — brand, dist, import package, and console script are all "bramber".
+name = "bramber"
+version = "0.1.0"
+description = "Compile many sources into versioned, point-of-view documents that cite their sources and resist being dominated by loud or irrelevant material. Served read-only over MCP."
+requires-python = ">=3.11"
+authors = [{ name = "Phil Lee" }]
+license = { text = "MIT" }
+dependencies = []  # the engine is stdlib-only by design (the Stop hook must never fail on a missing dep)
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.2"]            # the read-only MCP server (bramber.engine.server)
+embed = ["fastembed>=0.3"]    # the candidate index + retrieval surface (bramber.index); lazy, never required.
+                              # LOCAL, in-process (ONNX, no torch) — no API key, no network, nothing leaves
+                              # the machine. Ruled 2026-08-08 → decisions/2026-08-08-embeddings-run-on-a-local-model.md
+
+[project.scripts]
+bramber = "bramber.cli:main"
+
+[tool.setuptools]
+packages = ["bramber", "bramber.engine", "bramber.adapters"]
+
+[tool.setuptools.package-data]
+"bramber.engine" = ["schema.sql"]

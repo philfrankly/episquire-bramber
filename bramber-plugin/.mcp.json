@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "bramber": {
+      "command": "python",
+      "args": ["-m", "bramber.engine.server"],
+      "env": {
+        "BRAMBER_DB": "${CLAUDE_PROJECT_DIR}/bramber.db",
+        "BRAMBER_ROOT": "${CLAUDE_PROJECT_DIR}"
+      }
+    },
+    "bramber-retrieval": {
+      "command": "python",
+      "args": ["-m", "bramber.retrieval_server"],
+      "env": {
+        "BRAMBER_ROOT": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

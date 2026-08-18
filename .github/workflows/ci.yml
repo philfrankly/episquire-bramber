@@ -1,0 +1,56 @@
+name: CI
+
+# specs/06 §6. The structural suite blocks merge; anything prose-dependent reports only.
+#
+# The point of running this in CI at all is that bramber's central guarantees are *structural* —
+# the engine is domain-blind, one declaration governs the extract header, corroboration is counted
+# rather than collapsed — and structural claims are exactly the kind that rot silently between
+# releases. Every one of them is a test here.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Developed on Windows, published for everyone else. The path handling, the CRLF
+        # normalization and the sqlite file locking all differ, and every one of those has
+        # produced a real bug in this repo — so both run.
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      # Pinned to floating majors, deliberately: these are first-party GitHub actions and the
+      # cost of a stale pin here is a deprecation warning on every push, which is what v4/v5
+      # had become. Checked before bumping rather than after — v7 of checkout blocks fork-PR
+      # checkout on pull_request_target/workflow_run (neither is a trigger here) and v7 of
+      # setup-python dropped its pip-install input (installs below are explicit run: steps).
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      # No `pip install -r requirements.txt` on purpose: the engine is stdlib-only by design,
+      # because the Stop hook runs `bramber sync` every turn and must never fail on a missing
+      # dependency. If this step ever needs to grow, that is a design regression worth noticing
+      # here rather than discovering in someone else's editor.
+      - name: Install (no third-party dependency by design)
+        run: pip install -e .
+
+      # pytest is TEST TOOLING, not a dependency of bramber, and the distinction is the whole
+      # reason this is a separate step rather than folded into the line above. `pip install -e .`
+      # is what a user runs, and it must stay dependency-free; running the suite additionally
+      # needs a test runner, which no user ever installs. Merging these two steps would either
+      # put pytest in the package's dependencies (a real design regression) or leave CI unable
+      # to run the suite at all — which is exactly what happened before this step existed.
+      - name: Install the test runner
+        run: pip install "pytest>=8"
+
+      - name: Suite
+        run: python -m pytest tests/ -q

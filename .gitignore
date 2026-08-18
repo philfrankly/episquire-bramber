@@ -1,0 +1,25 @@
+# derived index — rebuildable from disk, never committed
+bramber.db
+bramber.db-wal
+bramber.db-shm
+
+# --trace output — a rendering of one run, reproducible by re-running it
+_bramber/traces/
+_bramber/runs/
+
+# the candidate index — a losable cache with bramber.db's exact status
+_bramber/index/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# editor
+.vscode/
+.idea/
+.verify-receipt.json

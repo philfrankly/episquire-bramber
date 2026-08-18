@@ -1,0 +1,13 @@
+{
+  "name": "bramber",
+  "displayName": "bramber",
+  "version": "0.1.0",
+  "description": "Compile many sources into versioned, point-of-view documents that cite their sources and resist being dominated by loud or irrelevant material. Point bramber at documents, notes, or code; define a view (what the document is for); bramber breaks each source into atomic units, selects the ones that fit the view, and compiles a living document with full lineage back to its evidence, served read-only over MCP. Run /bramber:init in a folder to get started.",
+  "author": {
+    "name": "Phil Lee"
+  },
+  "license": "MIT",
+  "keywords": ["knowledge-base", "mcp", "views", "sqlite", "documentation"],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}
